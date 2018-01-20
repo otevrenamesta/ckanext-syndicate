@@ -21,7 +21,7 @@ setup(
     long_description=long_description,
 
     # The project's main homepage.
-    url='https://github.com/aptivate/ckanext-syndicate',
+    url='https://github.com/otevrenamestkadata/ckanext-syndicate',
 
     # Author details
     author='''Aptivate''',
@@ -82,11 +82,8 @@ setup(
         [ckan.plugins]
         syndicate=ckanext.syndicate.plugin:SyndicatePlugin
 
-	[babel.extractors]
-	ckan = ckan.lib.extract:extract_ckan
-
-        [ckan.celery_task]
-        tasks=ckanext.syndicate.celery_import:task_imports
+        [babel.extractors]
+        ckan = ckan.lib.extract:extract_ckan
     ''',
 
     # If you are changing from the default layout of your extension, you may

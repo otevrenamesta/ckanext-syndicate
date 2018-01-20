@@ -19,10 +19,7 @@ value. This is useful if the schemas are different between CKAN instances.
 Requirements
 ------------
 
-* Tested with CKAN 2.5.x branch
-* Requires ``celery``
-* To work over SSL, requires ``pyOpenSSL``, ``ndg-httpsclient`` and ``pyasn1``
-* It may be useful to run Celery in a production environment through `supervisor <http://supervisord.org/>`_
+* To work over SSL, requires ``requests``, ``pyOpenSSL``, ``ndg-httpsclient`` and ``pyasn1``
 
 ------------
 Installation
@@ -42,28 +39,14 @@ To install ckanext-syndicate:
    config file (by default the config file is located at
    ``/etc/ckan/default/production.ini``).
 
-4. Restart CKAN. For example if you've deployed CKAN with Apache on Ubuntu::
+4. Restart CKAN. For example if you've deployed CKAN with Apache::
 
     sudo service apache2 reload
 
-5. You will also need to set up celery. In a development environment this can be done with the following paster command from within your virtual environment::
+5. You will also need to set up RQ job runner, to test it you can run::
 
-    paster --plugin=ckan celeryd run -c /etc/ckan/default/development.ini
+   paster jobs worker default
 
-6. In a production environment, celery can be configured through supervisor, for example ``/etc/supervisor/conf.d/celery.conf``::
-
-    [program:celery]
-    autorestart=true
-    autostart=true
-    command=/usr/lib/ckan/default/bin/paster --plugin=ckan celeryd --config=/etc/ckan/default/production.ini
-    numprocs=1
-    priority=998
-    redirect_stderr=true
-    startsecs=10
-    stderr_logfile=/var/log/celeryd.log
-    stdout_logfile=/var/log/celeryd.log
-    stopwaitsecs=600
-    user=www-data
 
 ---------------
 Config Settings

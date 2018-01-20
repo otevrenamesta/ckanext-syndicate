@@ -1,5 +1,6 @@
 import logging
 from urlparse import urlparse
+import ckan
 import ckanapi
 import os
 import routes
@@ -7,21 +8,41 @@ import routes
 from pylons import config
 
 import ckan.plugins.toolkit as toolkit
-from ckan.lib.celery_app import celery
 from ckan.lib.helpers import get_pkg_dict_extra
-from ckanext.syndicate.plugin import (
-    get_syndicate_flag,
-    get_syndicated_id,
-    get_syndicated_name_prefix,
-    get_syndicated_organization,
-    get_syndicated_author,
-    is_organization_preserved,
-)
+
+import requests
+import ckan.lib.uploader as uploader
 
 logger = logging.getLogger(__name__)
 
+def get_syndicate_flag():
+    return config.get('ckan.syndicate.flag', 'syndicate')
 
-@celery.task(name='syndicate.sync_package')
+
+def get_syndicated_id():
+    return config.get('ckan.syndicate.id', 'syndicated_id')
+
+
+def get_syndicated_author():
+    return config.get('ckan.syndicate.author')
+
+
+def get_syndicated_name_prefix():
+    return config.get('ckan.syndicate.name_prefix', '')
+
+
+def get_syndicated_organization():
+    return config.get('ckan.syndicate.organization', None)
+
+
+def is_organization_preserved():
+    return toolkit.asbool(config.get('ckan.syndicate.replicate_organization', False))
+
+
+# ----------- #
+# entry point #
+# ----------- #
+
 def sync_package_task(package, action, ckan_ini_filepath):
     logger = sync_package_task.get_logger()
     load_config(ckan_ini_filepath)
@@ -30,15 +51,19 @@ def sync_package_task(package, action, ckan_ini_filepath):
     return sync_package(package, action)
 
 
-# TODO: why mp this
-# enable celery logging for when you run nosetests -s
-log = logging.getLogger('ckanext.syndicate.tasks')
+logger = logging.getLogger(__name__)
 
 
 def get_logger():
-    return log
+    return logger
 sync_package_task.get_logger = get_logger
 
+def remove_items(package):
+    to_remove = ['id', 'md_state', 'md_sharing_level', 'md_syndicate',
+                 'md_syndicated_id', 'md_gdpr', 'md_primary_source']
+    for f in to_remove:
+       if f in package:
+          del package[f]
 
 def load_config(ckan_ini_filepath):
     import paste.deploy
@@ -94,10 +119,16 @@ def filter_extras(extras):
 
 
 def filter_resources(resources):
-    return [
-        {'url': r['url'], 'name': r['name']} for r in resources
-    ]
+    '''
+    Drop hash from resources
+    '''
+    res = resources[:]
 
+    for r in res:
+        if 'hash' in r:
+            r.pop('hash')
+
+    return res
 
 def sync_package(package_id, action, ckan_ini_filepath=None):
     logger.info('sync package {0}'.format(package_id))
@@ -106,7 +137,7 @@ def sync_package(package_id, action, ckan_ini_filepath=None):
     # time of task creation).
     from ckan import model
     context = {'model': model, 'ignore_auth': True, 'session': model.Session,
-               'use_cache': False, 'validate': False}
+               'use_cache': False, 'validate': True}  #LN False > True
 
     params = {
         'id': package_id,
@@ -115,7 +146,6 @@ def sync_package(package_id, action, ckan_ini_filepath=None):
         context,
         params,
     )
-
     if action == 'dataset/create':
         _create_package(package)
 
@@ -139,27 +169,43 @@ def replicate_remote_organization(org):
 
 
 def _create_package(package):
-    ckan = get_target()
+
+    rem_ckan = get_target()
 
     # Create a new package based on the local instance
     new_package_data = dict(package)
-    del new_package_data['id']
+    #del new_package_data['id']
+    remove_items(new_package_data)
+    del new_package_data['md_ticket_url']
 
-    new_package_data['name'] = "%s-%s" % (
+    format_name = "%s%s"
+    if get_syndicated_name_prefix():
+        format_name = "%s-%s"
+    new_package_data['name'] = format_name % (
         get_syndicated_name_prefix(),
         new_package_data['name'])
+    logger.info('_create_package: name=' +new_package_data['name'])
 
-    new_package_data['extras'] = filter_extras(new_package_data['extras'])
-    new_package_data['resources'] = filter_resources(package['resources'])
+    ''' LN
+    del new_package_data['extras']
+    if 'extras' in package:
+        new_package_data['extras'] = filter_extras(new_package_data['extras'])
+        for item in package['extras']:
+            new_package_data[item['key']] = item['value']
+    '''
 
-    org = new_package_data.pop('organization')
+    if 'resources' in package:
+        new_package_data['resources'] = filter_resources(package['resources'])
 
-    if is_organization_preserved():
-        org_id = replicate_remote_organization(org)
-    else:
-        org_id = get_syndicated_organization()
+    if (new_package_data.pop('type') == 'dataset'):
+      org = new_package_data.pop('organization')
 
-    new_package_data['owner_org'] = org_id
+      if is_organization_preserved():
+          org_id = replicate_remote_organization(org)
+      else:
+          org_id = get_syndicated_organization()
+
+      new_package_data['owner_org'] = org_id
 
     try:
         # TODO: No automated test
@@ -169,19 +215,29 @@ def _create_package(package):
         pass
 
     try:
-        remote_package = ckan.action.package_create(**new_package_data)
+        #logging.info("np {}".format(new_package_data))
+
+        remote_package = rem_ckan.action.package_create(**new_package_data)
+
+        # XXX: WTF
+        #remote_package = rem_ckan.action.ckanext_showcase_create(**new_package_data)
+        #logging.info("rp {}".format(remote_package))
+
         set_syndicated_id(package, remote_package['id'])
-    except toolkit.ValidationError as e:
-        if 'That URL is already in use.' in e.error_dict.get('name', []):
+        logging.info("Done")
+    except toolkit.ValidationError as e:  #at target instance
+        #0/0
+        #if u'Toto URL je ji\u017e pou\u017e\xedv\xe1no.' or 'That URL is already in use.' in e.error_dict.get('name', []):
+        if u'Validation Error' in e.error_dict.get('__type', []):
             logger.info("package with name '{0}' already exists. Check creator.".format(
                 new_package_data['name']))
             author = get_syndicated_author()
             if author is None:
                 raise
             try:
-                remote_package = ckan.action.package_show(
+                remote_package = rem_ckan.action.package_show(
                     id=new_package_data['name'])
-                remote_user = ckan.action.user_show(id=author)
+                remote_user = rem_ckan.action.user_show(id=author)
             except toolkit.ValidationError as e:
                 log.error(e.errors)
                 raise
@@ -193,11 +249,18 @@ def _create_package(package):
                     logger.info("Author is the same({0}). Updating".format(
                         author))
 
-                    ckan.action.package_update(
+                    res = rem_ckan.action.package_update(
                         id=remote_package['id'],
                         **new_package_data
                     )
+
+                    logger.debug("package_update result {}".format(res))
+
                     set_syndicated_id(package, remote_package['id'])
+
+                    if 'resources' in new_package_data:
+                        for r in new_package_data['resources']:
+                            self.upload_resource(r)
                 else:
                     logger.info(
                         "Creator of remote package '{0}' did not match '{1}'. Skipping".format(
@@ -205,9 +268,14 @@ def _create_package(package):
 
 
 def _update_package(package):
-    syndicated_id = get_pkg_dict_extra(package, get_syndicated_id())
 
-    if syndicated_id is None:
+    syndicated_id = None
+    if get_syndicated_id() in package:
+        #syndicated_id = get_pkg_dict_extra(package, get_syndicated_id())
+        syndicated_id = package[get_syndicated_id()]
+
+    if syndicated_id is None or str(syndicated_id) == '':
+        logging.info("syndication ID not found, creating package")
         _create_package(package)
         return
 
@@ -215,12 +283,26 @@ def _update_package(package):
 
     try:
         updated_package = dict(package)
-        # Keep the existing remote ID and Name
-        del updated_package['id']
-        del updated_package['name']
 
-        updated_package['extras'] = filter_extras(package['extras'])
-        updated_package['resources'] = filter_resources(package['resources'])
+        if not toolkit.asbool(updated_package[get_syndicate_flag()]) and updated_package[get_syndicated_id()] != "":
+            updated_package['state'] = 'deleted'
+
+        # Keep the existing remote ID and Name
+        #del updated_package['id']
+        del updated_package['name']
+        remove_items(updated_package)
+
+        rem_ckan = get_target()
+        remote_package = rem_ckan.action.package_show(id=package['name'])
+        updated_package['md_ticket_url'] = remote_package['md_ticket_url']
+
+        '''
+        if 'extras' in package:
+           updated_package['extras'] = filter_extras(package['extras'])
+        '''
+
+        if 'resources' in package:
+           updated_package['resources'] = filter_resources(package['resources'])
 
         org = updated_package.pop('organization')
 
@@ -243,18 +325,54 @@ def _update_package(package):
             id=syndicated_id,
             **updated_package
         )
+
+        if 'resources' in updated_package:
+            for r in updated_package['resources']:
+              upload_resource(r)
+
     except ckanapi.NotFound:
         _create_package(package)
 
+def upload_resource(resource):
+    logging.info("Got resource syndicate")
+    if resource['url_type'] != 'upload':
+      logging.info("Not upload url_type, skipping")
+      return
+    ckan_url = config.get('ckan.syndicate.ckan_url')
+    api_key = config.get('ckan.syndicate.api_key')
+    logging.info("Uploading resource {}".format(resource['id']))
+    url = os.path.join(ckan_url, 'api/action/resource_update')
+    logging.info("TO {}".format(url))
 
-def set_syndicated_id(local_package, remote_package_id):
-    """ Set the remote package id on the local package """
-    extras = local_package['extras']
-    extras_dict = dict([(o['key'], o['value']) for o in extras])
-    extras_dict.update({get_syndicated_id(): remote_package_id})
-    extras = [{'key': k, 'value': v} for (k, v) in extras_dict.iteritems()]
-    local_package['extras'] = extras
-    _update_package_extras(local_package)
+    fileurl = resource['url']
+    filename = os.path.basename(fileurl)
+
+    upload = uploader.get_resource_uploader(resource)
+    res = requests.post(url,
+                        data={'id': resource['id']},
+                        headers = {"X-CKAN-API-Key": api_key},
+                        files=[('upload', (filename, file(upload.get_path(resource['id']))))]) # all your parenthesis
+
+    logging.info("{}".format(res))
+
+def set_syndicated_id(local_package, remote_id):
+    local_package[get_syndicated_id()] = remote_id
+    _update_local_package(local_package)
+    # XXX: we should probably call udpate_search_index and update_package_extras
+    # as well or not??
+    #_update_search_index(package_obj.id, logger)
+
+def _update_local_package(package):
+    site_user = ckan.logic.get_action('get_site_user')({
+            'model': ckan.model,
+            'ignore_auth': True},
+            {}
+      )
+
+    context = {'model': ckan.model, 'ignore_auth': True, 'session': ckan.model.Session,
+               'use_cache': False, 'validate': True, 'user': site_user['name']}
+
+    toolkit.get_action('package_update')(context, package)
 
 
 def _update_package_extras(package):
@@ -284,7 +402,7 @@ def _update_search_index(package_id, log):
     from ckan.lib.search.index import PackageSearchIndex
     package_index = PackageSearchIndex()
     context_ = {'model': model, 'ignore_auth': True, 'session': model.Session,
-                'use_cache': False, 'validate': False}
+                'use_cache': False, 'validate': True}   #LN False > True
     package = toolkit.get_action('package_show')(context_, {'id': package_id})
     package_index.index_package(package, defer_commit=False)
     log.info('Search indexed %s', package['name'])
