@@ -170,7 +170,11 @@ def _create_package(package):
     new_package_data = dict(package)
     #del new_package_data['id']
     remove_items(new_package_data)
-    del new_package_data['md_ticket_url']
+
+    # don't sync md_ticket_url as public and private instances
+    # could have different trackers
+    if 'md_ticket_url' in new_package_data:
+        del new_package_data['md_ticket_url']
 
     format_name = "%s%s"
     if get_syndicated_name_prefix():
