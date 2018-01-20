@@ -112,12 +112,6 @@ def get_target():
     return ckan
 
 
-def filter_extras(extras):
-    extras_dict = dict([(o['key'], o['value']) for o in extras])
-    extras_dict.pop(get_syndicate_flag(), None)
-    return [{'key': k, 'value': v} for (k, v) in extras_dict.iteritems()]
-
-
 def filter_resources(resources):
     '''
     Drop hash from resources
@@ -185,14 +179,6 @@ def _create_package(package):
         get_syndicated_name_prefix(),
         new_package_data['name'])
     logger.info('_create_package: name=' +new_package_data['name'])
-
-    ''' LN
-    del new_package_data['extras']
-    if 'extras' in package:
-        new_package_data['extras'] = filter_extras(new_package_data['extras'])
-        for item in package['extras']:
-            new_package_data[item['key']] = item['value']
-    '''
 
     if 'resources' in package:
         new_package_data['resources'] = filter_resources(package['resources'])
@@ -295,11 +281,6 @@ def _update_package(package):
         rem_ckan = get_target()
         remote_package = rem_ckan.action.package_show(id=package['name'])
         updated_package['md_ticket_url'] = remote_package['md_ticket_url']
-
-        '''
-        if 'extras' in package:
-           updated_package['extras'] = filter_extras(package['extras'])
-        '''
 
         if 'resources' in package:
            updated_package['resources'] = filter_resources(package['resources'])
