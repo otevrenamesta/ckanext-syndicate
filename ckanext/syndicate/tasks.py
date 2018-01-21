@@ -284,7 +284,6 @@ def _update_package(package):
 
         rem_ckan = get_target()
         remote_package = rem_ckan.action.package_show(id=package['name'])
-        updated_package['md_ticket_url'] = remote_package['md_ticket_url']
 
         if 'resources' in package:
            updated_package['resources'] = filter_resources(package['resources'])
