@@ -269,6 +269,8 @@ def _update_package(package):
         _create_package(package)
         return
 
+    logger.info('_update_package: name=' + package['name'])
+
     ckan = get_target()
 
     try:
