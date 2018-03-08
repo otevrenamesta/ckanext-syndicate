@@ -14,6 +14,8 @@ from ckanext.syndicate.tasks import (get_syndicated_id,
                                      get_syndicate_flag,
                                      sync_package_task)
 
+import logging
+logger = logging.getLogger(__name__)
 
 def syndicate_dataset(package_id, topic):
     ckan_ini_filepath = os.path.abspath(config['__file__'])
@@ -42,10 +44,17 @@ class SyndicatePlugin(plugins.SingletonPlugin):
     def _syndicate_dataset(self, dataset, operation):
         topic = self._get_topic('dataset', operation)
 
-        #if topic is not None and self._syndicate(dataset):
-        #XXX: required?
+
+        logging.info("Syndicate flag: {} private: {} already syndicated {}".format(
+          toolkit.asbool(dataset.extras.get(get_syndicate_flag(), 'false'))
+          , dataset.private
+          , dataset.extras.get(get_syndicated_id()) != ''))
+
         if topic is not None and (self._syndicate(dataset) or dataset.extras.get(get_syndicated_id()) != ''):
+            logging.info("Package should be syndicated")
             syndicate_dataset(dataset.id, topic)
+        else:
+            logging.info("Package should NOT be syndicated")
 
     def _syndicate(self, dataset):
         return (not dataset.private and
